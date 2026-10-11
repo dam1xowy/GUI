@@ -535,7 +535,6 @@ class MainAppWindow(QMainWindow):
     def run_cmd_command(self):
         command = self.cmd_input.text().strip()
         if command:
-            self.cmd_output.append(f"C:\\> {command}")
             full_cmd = command + "\n"
             self.cmd_process.write(full_cmd.encode('cp852'))
             self.cmd_input.clear()
