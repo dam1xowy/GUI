@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import QApplication
 from ui.main_window import MainAppWindow
 
 def load_stylesheet(app_instance, filepath):
-    """Pomocnicza funkcja do wczytywania stylów z pliku QSS."""
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as file:
             app_instance.setStyleSheet(file.read())

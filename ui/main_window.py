@@ -568,7 +568,6 @@ class MainAppWindow(QMainWindow):
             return "127.0.0.1"
 
     def update_usb_ui(self, usb_text):
-        """Aktualizuje etykietę USB danymi z wątku HeavyTasksWorker."""
         self.usb_label.setText(usb_text)
 
     def change_volume(self, value):
