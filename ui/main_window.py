@@ -28,7 +28,7 @@ except ImportError:
 class MainAppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("System Telemetry & Management Dashboard")
+        self.setWindowTitle("projekt Grafika")
         self.resize(1350, 880)
         
         self.last_pos = QCursor.pos()
