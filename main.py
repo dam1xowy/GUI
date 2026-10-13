@@ -9,7 +9,7 @@ def load_stylesheet(app_instance, filepath):
         with open(filepath, "r", encoding="utf-8") as file:
             app_instance.setStyleSheet(file.read())
     else:
-        print(f"Ostrzeżenie: Nie znaleziono pliku stylów '{filepath}'. Uruchamiam z domyślnym motywem.")
+        print(f"Ostrzeżenie: Nie znaleziono pliku stylów '{filepath}'")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
