@@ -82,7 +82,8 @@ class HeavyTasksWorker(QThread):
                         mem_mb = mem_rss.rss / (1024 * 1024)
                         procs_ram.append((name, mem_mb))
                         
-                    cpu_usage = p.info.get('cpu_percent', 0.0)
+                    raw_cpu = p.info.get('cpu_percent', 0.0)
+                    cpu_usage = (raw_cpu / psutil.cpu_count()) if raw_cpu is not None else 0.0
                     if cpu_usage is not None:
                         procs_cpu.append((name, cpu_usage))
                         
