@@ -1,9 +1,11 @@
 import sys
 import os
+import re
 import shutil
 import socket
 import psutil
 import subprocess
+import time
 from datetime import datetime
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, 
@@ -16,12 +18,15 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtCore import QTimer, Qt, QUrl, QProcess
 
 from widgets.net_chart import TacticalNetChart
-from core.workers import SystemMonitorWorker, HeavyTasksWorker
+from core.workers import SystemMonitorWorker, HeavyTasksWorker, NtpSyncWorker
 
-try:
-    from pycaw.pycaw import AudioUtilities
-    PYCAW_AVAILABLE = True
-except ImportError:
+if os.name == 'nt':
+    try:
+        from pycaw.pycaw import AudioUtilities
+        PYCAW_AVAILABLE = True
+    except ImportError:
+        PYCAW_AVAILABLE = False
+else:
     PYCAW_AVAILABLE = False
 
 
@@ -30,6 +35,10 @@ class MainAppWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("projekt Grafika")
         self.resize(1350, 880)
+        
+        self.is_windows = (os.name == 'nt')
+        self.base_root_path = "C:\\" if self.is_windows else "/"
+        self.term_encoding = 'cp852' if self.is_windows else 'utf-8'
         
         self.last_pos = QCursor.pos()
         self.last_time = datetime.now()
@@ -42,9 +51,18 @@ class MainAppWindow(QMainWindow):
         net_io = psutil.net_io_counters()
         self.last_net_sent = net_io.bytes_sent
         self.last_net_recv = net_io.bytes_recv
+        self.ntp_time_epoch = None
+        self.ntp_sync_monotonic = None
 
         self.init_ui()
         self.start_background_workers()
+        self.ntp_worker = NtpSyncWorker(self)
+        self.ntp_worker.sync_ready.connect(self.handle_ntp_sync)
+        self.ntp_worker.sync_failed.connect(self.handle_ntp_sync_failure)
+        self.ntp_timer = QTimer(self)
+        self.ntp_timer.timeout.connect(self.sync_ntp_time)
+        self.ntp_timer.start(10 * 60 * 1000)
+        self.sync_ntp_time()
         self.fast_timer = QTimer(self)
         self.fast_timer.timeout.connect(self.update_fast_ui_elements)
         self.fast_timer.start(100)
@@ -95,7 +113,7 @@ class MainAppWindow(QMainWindow):
         cpu_widget = QWidget()
         self.cpu_threads_layout = QVBoxLayout(cpu_widget)
         self.cpu_bars = []
-        num_cores = psutil.cpu_count(logical=True)
+        num_cores = psutil.cpu_count(logical=True) or 1
         for i in range(num_cores):
             bar_layout = QHBoxLayout()
             lbl = QLabel(f"Wątek {i}:")
@@ -200,14 +218,12 @@ class MainAppWindow(QMainWindow):
         
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
         self.vol_slider.setRange(0, 100)
-        if PYCAW_AVAILABLE:
-            try:
-                speakers = AudioUtilities.GetSpeakers()
-                vol_val = int(speakers.volume_percent)
-                self.vol_slider.setValue(vol_val)
-                self.vol_label.setText(f"Głośność systemu: {vol_val}%")
-            except Exception as e:
-                print(f"Błąd pycaw init: {e}") 
+        
+        initial_vol = self._get_initial_volume()
+        if initial_vol is not None:
+            self.vol_slider.setValue(initial_vol)
+            self.vol_label.setText(f"Głośność systemu: {initial_vol}%")
+
         self.vol_slider.valueChanged.connect(self.change_volume)
         tele_layout.addWidget(self.vol_slider)
 
@@ -216,7 +232,7 @@ class MainAppWindow(QMainWindow):
         self.panic_btn.setStyleSheet("""
             QPushButton { 
                 background-color: #330000; color: #FF3333; 
-                border: 1px solid #FF3333; font-family: Consolas; 
+                border: 1px solid #FF3333; font-family: "Consolas", "Courier New", monospace; 
                 font-weight: bold; padding: 10px; border-radius: 4px;
             }
             QPushButton:hover { background-color: #FF3333; color: #000000; }
@@ -240,11 +256,10 @@ class MainAppWindow(QMainWindow):
         file_layout.addWidget(QLabel("<b>[ SEKTOR ANALIZY PLIKÓW & ZARZĄDZANIE ]</b>"))
         
         self.file_model = QFileSystemModel()
-        self.file_model.setRootPath("")
+        self.file_model.setRootPath(self.base_root_path)
         self.file_tree = QTreeView()
         self.file_tree.setModel(self.file_model)
-        root_path = "C:\\"
-        self.file_tree.setRootIndex(self.file_model.index(root_path))
+        self.file_tree.setRootIndex(self.file_model.index(self.base_root_path))
         self.file_tree.setColumnHidden(1, False)
         self.file_tree.setColumnHidden(2, True)
         self.file_tree.setColumnHidden(3, True)
@@ -294,7 +309,7 @@ class MainAppWindow(QMainWindow):
         self.usb_label.setWordWrap(True)
         nd_layout.addWidget(self.usb_label)
         
-        self.atomic_clock_label = QLabel("Zegar Atomowy (NTP Sync): 00:00:00.000 [SYNCHRONIZED]")
+        self.atomic_clock_label = QLabel("Zegar: Oczekiwanie na synchronizację NTP...")
         self.atomic_clock_label.setWordWrap(True)
         self.atomic_clock_label.setStyleSheet("color: #00FF66; font-weight: bold; font-size: 10pt; margin-top: 5px;")
         nd_layout.addWidget(self.atomic_clock_label)
@@ -318,7 +333,8 @@ class MainAppWindow(QMainWindow):
         cmd_layout.addWidget(self.cmd_output)
         
         cmd_input_layout = QHBoxLayout()
-        prompt_lbl = QLabel("C:\\> ")
+        prompt_text = "C:\\> " if self.is_windows else "$ "
+        prompt_lbl = QLabel(prompt_text)
         prompt_lbl.setStyleSheet("color: #00FF66; font-weight: bold;")
         
         self.cmd_input = QLineEdit()
@@ -335,7 +351,14 @@ class MainAppWindow(QMainWindow):
         self.cmd_process = QProcess(self)
         self.cmd_process.readyReadStandardOutput.connect(self.handle_cmd_stdout)
         self.cmd_process.readyReadStandardError.connect(self.handle_cmd_stderr)
-        self.cmd_process.start("cmd.exe")
+        
+        if self.is_windows:
+            self.cmd_process.start("cmd.exe")
+        else:
+            shell_bin = os.environ.get("SHELL", "/bin/bash")
+            if not os.path.exists(shell_bin):
+                shell_bin = "/bin/sh"
+            self.cmd_process.start(shell_bin)
 
     def _setup_browser_tab(self):
         tab4 = QWidget()
@@ -419,6 +442,18 @@ class MainAppWindow(QMainWindow):
                 self.proc_gpu_table.setItem(row, 1, QTableWidgetItem(f"{usage} %"))
 
     # --- SZYBKIE AKTUALIZACJE (MYSZ, CZAS, SIEĆ) ---
+    def sync_ntp_time(self):
+        if not self.ntp_worker.isRunning():
+            self.ntp_worker.start()
+
+    def handle_ntp_sync(self, epoch_time, monotonic_time):
+        self.ntp_time_epoch = epoch_time
+        self.ntp_sync_monotonic = monotonic_time
+
+    def handle_ntp_sync_failure(self):
+        if self.ntp_time_epoch is None:
+            self.atomic_clock_label.setText("Zegar lokalny: NTP niedostępne (sprawdź Internet / UDP 123)")
+
     def update_fast_ui_elements(self):
         now = datetime.now()
         
@@ -461,8 +496,15 @@ class MainAppWindow(QMainWindow):
         uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days > 0 else f"{hours}h {minutes}m {seconds}s"
         self.uptime_label.setText(f"System Uptime: {uptime_str}")
 
-        now_str = now.strftime("%H:%M:%S.%f")[:-3]
-        self.atomic_clock_label.setText(f"Zegar Atomowy (NTP Sync): {now_str} [SYNCHRONIZED]")
+        if self.ntp_time_epoch is None:
+            clock_now = now
+            clock_source = "lokalny; NTP niedostępne"
+        else:
+            synced_epoch = self.ntp_time_epoch + time.monotonic() - self.ntp_sync_monotonic
+            clock_now = datetime.fromtimestamp(synced_epoch)
+            clock_source = "NTP synchronized"
+        now_str = clock_now.strftime("%H:%M:%S.%f")[:-3]
+        self.atomic_clock_label.setText(f"Zegar ({clock_source}): {now_str}")
         self.ip_ping_label.setText(f"Lokalne IP: {self.cached_ip} | Status: Aktywny (OK)")
         
         try:
@@ -481,17 +523,22 @@ class MainAppWindow(QMainWindow):
     def get_selected_path(self):
         index = self.file_tree.currentIndex()
         if index.isValid():
-            path = self.file_model.filePath(index)
-            if path.startswith("C:\\"):
-                 path = path[3:]
-            return path
+            return self.file_model.filePath(index)
         return ""
 
+    def _get_target_directory(self):
+        selected = self.get_selected_path()
+        if not selected:
+            return self.base_root_path
+        if os.path.isdir(selected):
+            return selected
+        return os.path.dirname(selected) or self.base_root_path
+
     def create_new_file(self):
-        rel_path = self.get_selected_path()
-        name, ok = QInputDialog.getText(self, "Nowy Plik", f"Wprowadź nazwę nowego pliku w folderze C:\\{rel_path}:")
+        target_dir = self._get_target_directory()
+        name, ok = QInputDialog.getText(self, "Nowy Plik", f"Wprowadź nazwę nowego pliku w folderze {target_dir}:")
         if ok and name:
-            full_path = os.path.join("C:\\", rel_path, name)
+            full_path = os.path.join(target_dir, name)
             try:
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write("")
@@ -499,22 +546,21 @@ class MainAppWindow(QMainWindow):
                 QMessageBox.critical(self, "Błąd", f"Nie udało się utworzyć pliku:\n{str(e)}")
 
     def create_new_folder(self):
-        rel_path = self.get_selected_path()
-        name, ok = QInputDialog.getText(self, "Nowy Folder", f"Wprowadź nazwę nowego folderu w C:\\{rel_path}:")
+        target_dir = self._get_target_directory()
+        name, ok = QInputDialog.getText(self, "Nowy Folder", f"Wprowadź nazwę nowego folderu w {target_dir}:")
         if ok and name:
-            full_path = os.path.join("C:\\", rel_path, name)
+            full_path = os.path.join(target_dir, name)
             try:
                 os.makedirs(full_path, exist_ok=True)
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się utworzyć folderu:\n{str(e)}")
 
     def delete_selected_item(self):
-        rel_path = self.get_selected_path()
-        if not rel_path:
-            QMessageBox.warning(self, "Ostrzeżenie", "Wybierz plik lub folder w C:\\ do usunięcia.")
+        full_path = self.get_selected_path()
+        if not full_path or os.path.abspath(full_path) == os.path.abspath(self.base_root_path):
+            QMessageBox.warning(self, "Ostrzeżenie", f"Wybierz plik lub folder w {self.base_root_path} do usunięcia.")
             return
         
-        full_path = os.path.join("C:\\", rel_path)
         confirm = QMessageBox.question(
             self, 
             "Potwierdzenie usunięcia", 
@@ -535,19 +581,21 @@ class MainAppWindow(QMainWindow):
     def run_cmd_command(self):
         command = self.cmd_input.text().strip()
         if command:
+            if not self.is_windows:
+                self.cmd_output.insertPlainText(f"$ {command}\n")
             full_cmd = command + "\n"
-            self.cmd_process.write(full_cmd.encode('cp852'))
+            self.cmd_process.write(full_cmd.encode(self.term_encoding, errors='replace'))
             self.cmd_input.clear()
 
     def handle_cmd_stdout(self):
         data = self.cmd_process.readAllStandardOutput()
-        text = bytes(data).decode('cp852', errors='ignore')
+        text = bytes(data).decode(self.term_encoding, errors='ignore')
         self.cmd_output.insertPlainText(text)
         self.cmd_output.verticalScrollBar().setValue(self.cmd_output.verticalScrollBar().maximum())
 
     def handle_cmd_stderr(self):
         data = self.cmd_process.readAllStandardError()
-        text = bytes(data).decode('cp852', errors='ignore')
+        text = bytes(data).decode(self.term_encoding, errors='ignore')
         self.cmd_output.insertPlainText(text)
         self.cmd_output.verticalScrollBar().setValue(self.cmd_output.verticalScrollBar().maximum())
 
@@ -570,17 +618,63 @@ class MainAppWindow(QMainWindow):
     def update_usb_ui(self, usb_text):
         self.usb_label.setText(usb_text)
 
+    def _get_initial_volume(self):
+        if self.is_windows and PYCAW_AVAILABLE:
+            try:
+                speakers = AudioUtilities.GetSpeakers()
+                return int(speakers.volume_percent)
+            except Exception as e:
+                print(f"Błąd pycaw init: {e}")
+        elif not self.is_windows:
+            try:
+                if shutil.which("pactl"):
+                    res = subprocess.run(
+                        ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
+                        capture_output=True, text=True, errors="ignore"
+                    )
+                    match = re.search(r'(\d+)%', res.stdout)
+                    if match:
+                        return min(100, int(match.group(1)))
+                elif shutil.which("amixer"):
+                    res = subprocess.run(
+                        ["amixer", "get", "Master"],
+                        capture_output=True, text=True, errors="ignore"
+                    )
+                    match = re.search(r'\[(\d+)%\]', res.stdout)
+                    if match:
+                        return min(100, int(match.group(1)))
+            except Exception as e:
+                print(f"Błąd odczytu głośności Linux: {e}")
+        return None
+
     def change_volume(self, value):
         self.vol_label.setText(f"Głośność systemu: {value}%")
-        if PYCAW_AVAILABLE:
+        if self.is_windows and PYCAW_AVAILABLE:
             try:
                 speakers = AudioUtilities.GetSpeakers()
                 speakers.volume_percent = value
             except Exception as e:
-                print(f"Błąd zmiany głośności: {e}") 
+                print(f"Błąd zmiany głośności: {e}")
+        elif not self.is_windows:
+            try:
+                if shutil.which("pactl"):
+                    subprocess.Popen(
+                        ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{value}%"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                elif shutil.which("amixer"):
+                    subprocess.Popen(
+                        ["amixer", "set", "Master", f"{value}%"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+            except Exception as e:
+                print(f"Błąd zmiany głośności Linux: {e}")
 
     def trigger_shutdown(self):
-        os.system("shutdown /s /t 5")
+        if self.is_windows:
+            os.system("shutdown /s /t 5")
+        else:
+            os.system("systemctl poweroff || shutdown -h now")
         self.panic_btn.setText("seriously?")
         self.panic_btn.setEnabled(False)
 
@@ -596,6 +690,11 @@ class MainAppWindow(QMainWindow):
         super().mousePressEvent(event)
 
     def closeEvent(self, event):
+        self.ntp_worker.requestInterruption()
+        self.ntp_worker.wait()
         self.sys_worker.stop()
         self.heavy_worker.stop()
+        if hasattr(self, 'cmd_process') and self.cmd_process.state() != QProcess.ProcessState.NotRunning:
+            self.cmd_process.terminate()
+            self.cmd_process.waitForFinished(1000)
         event.accept()

@@ -14,7 +14,11 @@ def load_stylesheet(app_instance, filepath):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     
-    load_stylesheet(app, "styles.qss")
+    # Ustalenie ścieżki bazowej do pliku stylów QSS niezależnie od systemu operacyjnego
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    stylesheet_path = os.path.join(base_dir, "styles.qss")
+    
+    load_stylesheet(app, stylesheet_path)
     
     window = MainAppWindow()
     window.show()
