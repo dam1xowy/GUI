@@ -61,6 +61,7 @@ class MainAppWindow(QMainWindow):
         net_io = psutil.net_io_counters()
         self.last_net_sent = net_io.bytes_sent
         self.last_net_recv = net_io.bytes_recv
+        self.last_net_sample_time = time.monotonic()
         self.ntp_time_epoch = None
         self.ntp_sync_monotonic = None
 
@@ -77,6 +78,9 @@ class MainAppWindow(QMainWindow):
         self.fast_timer = QTimer(self)
         self.fast_timer.timeout.connect(self.update_fast_ui_elements)
         self.fast_timer.start(100)
+        self.network_timer = QTimer(self)
+        self.network_timer.timeout.connect(self.update_network_charts)
+        self.network_timer.start(1000)
 
     def _make_process_table_read_only(self, table):
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -523,17 +527,6 @@ class MainAppWindow(QMainWindow):
         self.dist_label.setText(f"Mouse Distance: {self.total_distance:.2f} m")
         self.speed_label.setText(f"Cursor Speed: {self.current_speed:.1f} px/s")
 
-        if now.microsecond < 150000: 
-            net_io = psutil.net_io_counters()
-            sent_speed = (net_io.bytes_sent - self.last_net_sent) / 1024.0 
-            recv_speed = (net_io.bytes_recv - self.last_net_recv) / 1024.0 
-            
-            self.last_net_sent = net_io.bytes_sent
-            self.last_net_recv = net_io.bytes_recv
-            
-            self.dl_chart.update_data(recv_speed)
-            self.ul_chart.update_data(sent_speed)
-
         boot_timestamp = psutil.boot_time()
         uptime_seconds = int(now.timestamp() - boot_timestamp)
         days = uptime_seconds // 86400
@@ -565,6 +558,25 @@ class MainAppWindow(QMainWindow):
                 self.clipboard_label.setText("Clipboard: [empty]")
         except Exception as e:
             print(f"Clipboard error: {e}")
+
+    def update_network_charts(self):
+        net_io = psutil.net_io_counters()
+        sample_time = time.monotonic()
+        elapsed = sample_time - self.last_net_sample_time
+        sent_bytes = net_io.bytes_sent - self.last_net_sent
+        recv_bytes = net_io.bytes_recv - self.last_net_recv
+
+        self.last_net_sent = net_io.bytes_sent
+        self.last_net_recv = net_io.bytes_recv
+        self.last_net_sample_time = sample_time
+
+        if elapsed <= 0:
+            return
+
+        sent_speed = max(0, sent_bytes) / elapsed / 1024.0
+        recv_speed = max(0, recv_bytes) / elapsed / 1024.0
+        self.dl_chart.update_data(recv_speed)
+        self.ul_chart.update_data(sent_speed)
 
     def get_selected_path(self):
         index = self.file_tree.currentIndex()

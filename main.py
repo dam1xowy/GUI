@@ -13,7 +13,6 @@ def load_stylesheet(app_instance, filepath):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    
     base_dir = os.path.dirname(os.path.abspath(__file__))
     stylesheet_path = os.path.join(base_dir, "styles.qss")
     
