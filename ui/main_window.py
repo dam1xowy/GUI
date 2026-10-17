@@ -1,4 +1,3 @@
-import sys
 import os
 import re
 import shutil
@@ -22,32 +21,34 @@ from core.workers import SystemMonitorWorker, HeavyTasksWorker, NtpSyncWorker
 
 
 class DeselectableFileTreeView(QTreeView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.last_selected_path = ""
+
     def mousePressEvent(self, event):
-        if os.name == 'nt' and not self.indexAt(event.position().toPoint()).isValid():
+        index = self.indexAt(event.position().toPoint())
+        if not index.isValid():
+            current = self.currentIndex()
+            if current.isValid():
+                self.last_selected_path = self.model().filePath(current)
             self.clearSelection()
             self.setCurrentIndex(QModelIndex())
+
         super().mousePressEvent(event)
 
-
-if os.name == 'nt':
-    try:
-        from pycaw.pycaw import AudioUtilities
-        PYCAW_AVAILABLE = True
-    except ImportError:
-        PYCAW_AVAILABLE = False
-else:
-    PYCAW_AVAILABLE = False
+        current = self.currentIndex()
+        if current.isValid():
+            self.last_selected_path = self.model().filePath(current)
 
 
 class MainAppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("projekt Grafika")
+        self.setWindowTitle("Nitro GUI")
         self.resize(1350, 880)
         
-        self.is_windows = (os.name == 'nt')
-        self.base_root_path = "C:\\" if self.is_windows else "/"
-        self.term_encoding = 'cp852' if self.is_windows else 'utf-8'
+        self.base_root_path = "/"
+        self.term_encoding = "utf-8"
         
         self.last_pos = QCursor.pos()
         self.last_time = datetime.now()
@@ -78,8 +79,6 @@ class MainAppWindow(QMainWindow):
         self.fast_timer.start(100)
 
     def _make_process_table_read_only(self, table):
-        if not self.is_windows:
-            return
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -118,7 +117,7 @@ class MainAppWindow(QMainWindow):
         
         cpu_top_layout = QHBoxLayout()
         cpu_top_layout.addWidget(QLabel("<b>[ CPU THREADS & TEMPERATURE ]</b>"))
-        self.temp_label = QLabel("CPU Temp: OK")
+        self.temp_label = QLabel("CPU Temperature: reading...")
         self.temp_label.setStyleSheet("color: #FFB300; font-weight: bold;")
         cpu_top_layout.addWidget(self.temp_label, alignment=Qt.AlignmentFlag.AlignRight)
         cpu_layout.addLayout(cpu_top_layout)
@@ -249,7 +248,14 @@ class MainAppWindow(QMainWindow):
 
         tele_layout.addSpacing(10)
         self.panic_btn = QPushButton("PRESS FOR SURPRISE")
-        self.panic_btn.setObjectName("panicButton")
+        self.panic_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #330000; color: #FF3333;
+                border: 1px solid #FF3333; font-family: monospace;
+                font-weight: bold; padding: 10px; border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #FF3333; color: #000000; }
+        """)
         self.panic_btn.clicked.connect(self.trigger_shutdown)
         tele_layout.addWidget(self.panic_btn)
         
@@ -302,7 +308,7 @@ class MainAppWindow(QMainWindow):
         nd_layout.setSpacing(10)
         nd_layout.addWidget(QLabel("<b>[ NETWORK & STORAGE DIAGNOSTICS ]</b>"))
         
-        self.disk_label = QLabel("Drives: Scanning...")
+        self.disk_label = QLabel("System Disk: Scanning...")
         self.disk_label.setWordWrap(True)
         nd_layout.addWidget(self.disk_label)
         
@@ -339,22 +345,21 @@ class MainAppWindow(QMainWindow):
         
         cmd_frame = QFrame()
         cmd_layout = QVBoxLayout(cmd_frame)
-        cmd_layout.addWidget(QLabel("<b>[ SYSTEM COMMAND SHELL - INTERACTIVE TERMINAL ]</b>"))
+        cmd_layout.addWidget(QLabel("<b>[ SYSTEM SHELL - INTERACTIVE TERMINAL ]</b>"))
         
         self.cmd_output = QTextEdit()
         self.cmd_output.setReadOnly(True)
         cmd_layout.addWidget(self.cmd_output)
         
         cmd_input_layout = QHBoxLayout()
-        prompt_text = "C:\\> " if self.is_windows else "$ "
-        prompt_lbl = QLabel(prompt_text)
-        prompt_lbl.setStyleSheet("color: #00FF66; font-weight: bold;")
+        self.prompt_label = QLabel("$ ")
+        self.prompt_label.setStyleSheet("color: #00FF66; font-weight: bold;")
         
         self.cmd_input = QLineEdit()
         self.cmd_input.setPlaceholderText("Enter a command...")
         self.cmd_input.returnPressed.connect(self.run_cmd_command)
         
-        cmd_input_layout.addWidget(prompt_lbl)
+        cmd_input_layout.addWidget(self.prompt_label)
         cmd_input_layout.addWidget(self.cmd_input)
         cmd_layout.addLayout(cmd_input_layout)
         
@@ -365,13 +370,45 @@ class MainAppWindow(QMainWindow):
         self.cmd_process.readyReadStandardOutput.connect(self.handle_cmd_stdout)
         self.cmd_process.readyReadStandardError.connect(self.handle_cmd_stderr)
         
-        if self.is_windows:
-            self.cmd_process.start("cmd.exe")
-        else:
-            shell_bin = os.environ.get("SHELL", "/bin/bash")
-            if not os.path.exists(shell_bin):
-                shell_bin = "/bin/sh"
-            self.cmd_process.start(shell_bin)
+        shell_bin = os.environ.get("SHELL", "/bin/bash")
+        if not os.path.exists(shell_bin):
+            shell_bin = "/bin/bash"
+        self.terminal_output_buffer = ""
+        self.cmd_process.started.connect(self._request_terminal_directory)
+        self.cmd_process.start(shell_bin)
+
+    def _request_terminal_directory(self):
+        self.cmd_process.write(b'printf "\\036GUI_CWD:%s\\037" "$PWD"\n')
+
+    def _show_terminal_output(self, text):
+        start_marker = "\x1eGUI_CWD:"
+        end_marker = "\x1f"
+        self.terminal_output_buffer += text
+
+        while True:
+            marker_start = self.terminal_output_buffer.find(start_marker)
+            if marker_start == -1:
+                keep = 0
+                for length in range(1, len(start_marker)):
+                    if self.terminal_output_buffer.endswith(start_marker[:length]):
+                        keep = length
+                if keep:
+                    self.cmd_output.insertPlainText(self.terminal_output_buffer[:-keep])
+                    self.terminal_output_buffer = self.terminal_output_buffer[-keep:]
+                else:
+                    self.cmd_output.insertPlainText(self.terminal_output_buffer)
+                    self.terminal_output_buffer = ""
+                return
+
+            self.cmd_output.insertPlainText(self.terminal_output_buffer[:marker_start])
+            marker_end = self.terminal_output_buffer.find(end_marker, marker_start + len(start_marker))
+            if marker_end == -1:
+                self.terminal_output_buffer = self.terminal_output_buffer[marker_start:]
+                return
+
+            directory = self.terminal_output_buffer[marker_start + len(start_marker):marker_end]
+            self.prompt_label.setText(f"{directory} $ ")
+            self.terminal_output_buffer = self.terminal_output_buffer[marker_end + len(end_marker):]
 
     def _setup_browser_tab(self):
         tab4 = QWidget()
@@ -404,6 +441,7 @@ class MainAppWindow(QMainWindow):
     def start_background_workers(self):
         self.sys_worker = SystemMonitorWorker(self)
         self.sys_worker.cpu_data_ready.connect(self.update_cpu_ui)
+        self.sys_worker.cpu_temperature_ready.connect(self.update_cpu_temperature_ui)
         self.sys_worker.ram_data_ready.connect(self.update_ram_ui)
         self.sys_worker.start()
 
@@ -415,6 +453,12 @@ class MainAppWindow(QMainWindow):
         self.heavy_worker.start()
 
     # --- UI UPDATES FROM WORKERS ---
+    def update_cpu_temperature_ui(self, temperature):
+        if temperature is None:
+            self.temp_label.setText("CPU Temperature: unavailable")
+        else:
+            self.temp_label.setText(f"CPU Temperature: {temperature:.1f} °C")
+
     def update_cpu_ui(self, cpu_usages):
         for i, usage in enumerate(cpu_usages):
             if i < len(self.cpu_bars):
@@ -431,7 +475,7 @@ class MainAppWindow(QMainWindow):
                 block.setStyleSheet("background-color: #121e12; border: 1px solid #1f331f; border-radius: 2px;")
 
     def update_disks_ui(self, disks_text):
-        self.disk_label.setText(f"Drives: {disks_text}")
+        self.disk_label.setText(f"System Disk: {disks_text}")
 
     def update_processes_ui(self, procs_ram, procs_cpu):
         self.proc_table.clearContents()
@@ -542,6 +586,9 @@ class MainAppWindow(QMainWindow):
     def _get_target_directory(self):
         selected = self.get_selected_path()
         if not selected:
+            last_selected = self.file_tree.last_selected_path
+            if last_selected:
+                return os.path.dirname(last_selected) or self.base_root_path
             return self.base_root_path
         if os.path.isdir(selected):
             return selected
@@ -556,7 +603,7 @@ class MainAppWindow(QMainWindow):
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write("")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not create the file:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Could not create the file:\n{e}")
 
     def create_new_folder(self):
         target_dir = self._get_target_directory()
@@ -566,7 +613,7 @@ class MainAppWindow(QMainWindow):
             try:
                 os.makedirs(full_path, exist_ok=True)
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not create the folder:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Could not create the folder:\n{e}")
 
     def delete_selected_item(self):
         full_path = self.get_selected_path()
@@ -588,22 +635,22 @@ class MainAppWindow(QMainWindow):
                 else:
                     os.remove(full_path)
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not delete the item:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Could not delete the item:\n{e}")
 
     # --- TERMINAL AND OTHER FUNCTIONS ---
     def run_cmd_command(self):
         command = self.cmd_input.text().strip()
         if command:
-            if not self.is_windows:
-                self.cmd_output.insertPlainText(f"$ {command}\n")
+            self.cmd_output.insertPlainText(f"{self.prompt_label.text()}{command}\n")
             full_cmd = command + "\n"
             self.cmd_process.write(full_cmd.encode(self.term_encoding, errors='replace'))
+            self._request_terminal_directory()
             self.cmd_input.clear()
 
     def handle_cmd_stdout(self):
         data = self.cmd_process.readAllStandardOutput()
         text = bytes(data).decode(self.term_encoding, errors='ignore')
-        self.cmd_output.insertPlainText(text)
+        self._show_terminal_output(text)
         self.cmd_output.verticalScrollBar().setValue(self.cmd_output.verticalScrollBar().maximum())
 
     def handle_cmd_stderr(self):
@@ -632,62 +679,45 @@ class MainAppWindow(QMainWindow):
         self.usb_label.setText(usb_text)
 
     def _get_initial_volume(self):
-        if self.is_windows and PYCAW_AVAILABLE:
-            try:
-                speakers = AudioUtilities.GetSpeakers()
-                return int(speakers.volume_percent)
-            except Exception as e:
-                print(f"pycaw initialization error: {e}")
-        elif not self.is_windows:
-            try:
-                if shutil.which("pactl"):
-                    res = subprocess.run(
-                        ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
-                        capture_output=True, text=True, errors="ignore"
-                    )
-                    match = re.search(r'(\d+)%', res.stdout)
-                    if match:
-                        return min(100, int(match.group(1)))
-                elif shutil.which("amixer"):
-                    res = subprocess.run(
-                        ["amixer", "get", "Master"],
-                        capture_output=True, text=True, errors="ignore"
-                    )
-                    match = re.search(r'\[(\d+)%\]', res.stdout)
-                    if match:
-                        return min(100, int(match.group(1)))
-            except Exception as e:
-                print(f"Linux volume read error: {e}")
+        try:
+            if shutil.which("pactl"):
+                res = subprocess.run(
+                    ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
+                    capture_output=True, text=True, errors="ignore"
+                )
+                match = re.search(r'(\d+)%', res.stdout)
+                if match:
+                    return min(100, int(match.group(1)))
+            elif shutil.which("amixer"):
+                res = subprocess.run(
+                    ["amixer", "get", "Master"],
+                    capture_output=True, text=True, errors="ignore"
+                )
+                match = re.search(r'\[(\d+)%\]', res.stdout)
+                if match:
+                    return min(100, int(match.group(1)))
+        except Exception as e:
+            print(f"Linux volume read error: {e}")
         return None
 
     def change_volume(self, value):
         self.vol_label.setText(f"System Volume: {value}%")
-        if self.is_windows and PYCAW_AVAILABLE:
-            try:
-                speakers = AudioUtilities.GetSpeakers()
-                speakers.volume_percent = value
-            except Exception as e:
-                print(f"Volume change error: {e}")
-        elif not self.is_windows:
-            try:
-                if shutil.which("pactl"):
-                    subprocess.Popen(
-                        ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{value}%"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                elif shutil.which("amixer"):
-                    subprocess.Popen(
-                        ["amixer", "set", "Master", f"{value}%"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-            except Exception as e:
-                print(f"Linux volume change error: {e}")
+        try:
+            if shutil.which("pactl"):
+                subprocess.Popen(
+                    ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{value}%"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            elif shutil.which("amixer"):
+                subprocess.Popen(
+                    ["amixer", "set", "Master", f"{value}%"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+        except Exception as e:
+            print(f"Linux volume change error: {e}")
 
     def trigger_shutdown(self):
-        if self.is_windows:
-            os.system("shutdown /s /t 5")
-        else:
-            os.system("systemctl poweroff || shutdown -h now")
+        os.system("systemctl poweroff || shutdown -h now")
         self.panic_btn.setText("seriously?")
         self.panic_btn.setEnabled(False)
 
@@ -701,52 +731,34 @@ class MainAppWindow(QMainWindow):
         self.click_label.setText(f"Total Mouse Clicks: {self.click_count}")
 
     def eventFilter(self, watched, event):
-        if isinstance(watched, QWidget):
-            belongs_to_window = watched is self or self.isAncestorOf(watched)
-            if belongs_to_window:
-                event_type = event.type()
-                if (
-                    event_type == QEvent.Type.KeyPress
-                    and QApplication.focusWidget() is watched
-                ):
+        if isinstance(watched, QWidget) and (watched is self or self.isAncestorOf(watched)):
+            event_type = event.type()
+            process_tables = (self.proc_table, self.proc_cpu_table, self.proc_gpu_table)
+            is_process_table = any(
+                table is watched or table.isAncestorOf(watched)
+                for table in process_tables
+            )
+
+            if event_type in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+                click_target = QApplication.widgetAt(event.globalPosition().toPoint())
+                if click_target is watched:
+                    self._record_mouse_click()
+
+            if is_process_table and event_type in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseButtonDblClick,
+                QEvent.Type.ContextMenu,
+                QEvent.Type.KeyPress,
+            ):
+                return True
+
+            if event_type == QEvent.Type.KeyPress:
+                focus_widget = QApplication.focusWidget()
+                if focus_widget is watched or focus_widget is None:
                     self._record_key_press()
 
-                if self.is_windows:
-                    mouse_events = (
-                        QEvent.Type.MouseButtonPress,
-                        QEvent.Type.MouseButtonRelease,
-                        QEvent.Type.MouseButtonDblClick,
-                    )
-                    if event_type in (
-                        QEvent.Type.MouseButtonPress,
-                        QEvent.Type.MouseButtonDblClick,
-                    ) and QApplication.widgetAt(event.globalPosition().toPoint()) is watched:
-                        self._record_mouse_click()
-
-                    process_tables = (
-                        self.proc_table,
-                        self.proc_cpu_table,
-                        self.proc_gpu_table,
-                    )
-                    if any(table is watched or table.isAncestorOf(watched) for table in process_tables):
-                        if event_type in mouse_events or event_type in (
-                            QEvent.Type.KeyPress,
-                            QEvent.Type.KeyRelease,
-                            QEvent.Type.ContextMenu,
-                        ):
-                            return True
-
         return super().eventFilter(watched, event)
-
-    def mousePressEvent(self, event):
-        if not self.is_windows:
-            self._record_mouse_click()
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        if not self.is_windows:
-            self._record_mouse_click()
-        super().mouseDoubleClickEvent(event)
 
     def closeEvent(self, event):
         app = QApplication.instance()

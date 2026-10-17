@@ -2,6 +2,19 @@ QMainWindow {
     background-color: #060906; 
 }
 
+QDialog, QInputDialog, QMessageBox {
+    background-color: #060906;
+    color: #00FF66;
+}
+
+QDialog QLabel, QMessageBox QLabel {
+    color: #00FF66;
+}
+
+QDialogButtonBox {
+    background-color: #060906;
+}
+
 QTabWidget::pane {
     border: 1px solid #1f331f;
     background-color: #060906;
@@ -13,7 +26,7 @@ QTabBar::tab {
     color: #00FF66;
     border: 1px solid #1f331f;
     padding: 9px 18px;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: monospace;
     font-weight: bold;
     font-size: 9pt;
     border-top-left-radius: 5px;
@@ -29,7 +42,7 @@ QTabBar::tab:selected {
 
 QLabel { 
     color: #00FF66; 
-    font-family: "Consolas", "Courier New", monospace; 
+    font-family: monospace;
     font-size: 9pt; 
 }
 
@@ -38,7 +51,7 @@ QProgressBar {
     background: #0b140b; 
     text-align: center; 
     color: white; 
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: monospace;
     font-size: 8pt;
     border-radius: 3px;
     height: 14px;
@@ -59,7 +72,7 @@ QTableWidget, QTreeView, QTextEdit {
     background-color: #050805;
     color: #00FF66;
     gridline-color: #1f331f;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: monospace;
     font-size: 9pt;
     border: 1px solid #1f331f;
 }
@@ -71,6 +84,11 @@ QHeaderView::section {
     padding: 4px;
 }
 
+QTableCornerButton::section {
+    background-color: #0f1f0f;
+    border: 1px solid #1f331f;
+}
+
 QTreeView::item:selected {
     background-color: #162a16;
     color: #33ff88;
@@ -80,7 +98,7 @@ QLineEdit {
     background-color: #0b140b;
     color: #00FF66;
     border: 1px solid #00FF66;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: monospace;
     font-size: 9pt;
     padding: 6px;
     border-radius: 4px;
@@ -90,7 +108,7 @@ QPushButton {
     background-color: #0b140b;
     color: #00FF66;
     border: 1px solid #00FF66;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: monospace;
     font-weight: bold;
     padding: 7px;
     border-radius: 4px;
@@ -99,21 +117,6 @@ QPushButton {
 QPushButton:hover {
     background-color: #162a16;
     color: #33ff88;
-}
-
-QPushButton#panicButton {
-    background-color: #330000;
-    color: #FF3333;
-    border: 1px solid #FF3333;
-    font-family: "Consolas", "Courier New", monospace;
-    font-weight: bold;
-    padding: 10px;
-    border-radius: 4px;
-}
-
-QPushButton#panicButton:hover {
-    background-color: #FF3333;
-    color: #000000;
 }
 
 QSlider::groove:horizontal {

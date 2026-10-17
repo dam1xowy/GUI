@@ -1,5 +1,3 @@
-import os
-import sys
 import glob
 import shutil
 import subprocess
@@ -68,16 +66,40 @@ class NtpSyncWorker(QThread):
 
 class SystemMonitorWorker(QThread):
     cpu_data_ready = pyqtSignal(list)
+    cpu_temperature_ready = pyqtSignal(object)
     ram_data_ready = pyqtSignal(object)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.is_running = True
 
+    @staticmethod
+    def _get_cpu_temperature():
+        cpu_sensors = ('k10temp', 'zenpower', 'coretemp', 'cpu_thermal', 'x86_pkg_temp')
+        preferred_labels = ('tctl', 'tdie', 'package id 0', 'cpu')
+        temperatures = psutil.sensors_temperatures()
+
+        for sensor_name, readings in temperatures.items():
+            if sensor_name.lower() not in cpu_sensors:
+                continue
+
+            for reading in readings:
+                if reading.current > 0 and (
+                    reading.label.lower() in preferred_labels or not reading.label
+                ):
+                    return reading.current
+
+            valid_readings = [reading.current for reading in readings if reading.current > 0]
+            if valid_readings:
+                return max(valid_readings)
+
+        return None
+
     def run(self):
         while self.is_running:
             cpu_usages = psutil.cpu_percent(percpu=True, interval=0.5) 
             self.cpu_data_ready.emit(cpu_usages)
+            self.cpu_temperature_ready.emit(self._get_cpu_temperature())
             
             ram = psutil.virtual_memory()
             self.ram_data_ready.emit(ram)
@@ -100,15 +122,6 @@ class HeavyTasksWorker(QThread):
         self.is_running = True
         self.loop_counter = 0
 
-    def _get_subprocess_kwargs(self):
-        """Return flags that hide the console window on Windows only."""
-        kwargs = {}
-        if os.name == 'nt':
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            kwargs['startupinfo'] = startupinfo
-        return kwargs
-
     def run(self):
         self._scan_usb()
 
@@ -126,28 +139,16 @@ class HeavyTasksWorker(QThread):
 
     def _scan_disks(self):
         try:
-            partitions = psutil.disk_partitions(all=False)
-            disk_texts = []
-            for p in partitions:
-                if os.name == 'nt':
-                    if 'fixed' not in p.opts.lower():
-                        continue
-                    label = p.device
-                else:
-                    # Skip virtual images (e.g. snap packages) and temporary Linux filesystems.
-                    if p.device.startswith('/dev/loop') or p.fstype in ('squashfs', 'tmpfs', 'devtmpfs'):
-                        continue
-                    label = p.mountpoint
-
-                try:
-                    u = psutil.disk_usage(p.mountpoint)
-                    disk_texts.append(f"[{label}] {u.percent}%")
-                except PermissionError:
-                    continue
-
-            self.disks_data_ready.emit(" | ".join(disk_texts[:3]) if disk_texts else "No data")
+            usage = psutil.disk_usage("/")
+            gib = 1024 ** 3
+            used = usage.used / gib
+            total = usage.total / gib
+            self.disks_data_ready.emit(
+                f"{usage.percent}% ({used:.1f} / {total:.1f} GiB)"
+            )
         except Exception as e:
             print(f"Disk read error: {e}")
+            self.disks_data_ready.emit("Disk read unavailable")
 
     def _scan_processes(self):
         try:
@@ -183,15 +184,6 @@ class HeavyTasksWorker(QThread):
         try:
             gpu_procs = []
             nvsmi_path = shutil.which("nvidia-smi")
-            
-            if not nvsmi_path and os.name == 'nt':
-                for fallback in [
-                    r"C:\Windows\System32\nvidia-smi.exe",
-                    r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
-                ]:
-                    if os.path.exists(fallback):
-                        nvsmi_path = fallback
-                        break
 
             if not nvsmi_path:
                 self.gpu_data_ready.emit([])
@@ -201,8 +193,7 @@ class HeavyTasksWorker(QThread):
                 [nvsmi_path, "pmon", "-c", "1"],
                 capture_output=True,
                 text=True,
-                errors='ignore',
-                **self._get_subprocess_kwargs()
+                errors='ignore'
             )
             
             if result.returncode == 0 and result.stdout:
@@ -235,54 +226,34 @@ class HeavyTasksWorker(QThread):
     def _scan_usb(self):
         try:
             devices = []
-            if os.name == 'nt':
-                cmd = (
-                    'powershell "Get-PnpDevice -PresentOnly | '
-                    'Where-Object {$_.InstanceId -match \'^USB\' -and $_.FriendlyName -notmatch \'Hub|Composite|Root|Kontroler\'} | '
-                    'Select-Object -ExpandProperty FriendlyName -Unique"'
-                )
+            if shutil.which("lsusb"):
                 result = subprocess.run(
-                    cmd,
+                    ["lsusb"],
                     capture_output=True,
                     text=True,
-                    shell=True,
-                    encoding='cp850',
-                    errors='ignore',
-                    **self._get_subprocess_kwargs()
+                    errors='ignore'
                 )
                 for line in result.stdout.split('\n'):
-                    name = line.strip()
-                    if name and name not in devices:
-                        devices.append(name)
+                    # Example: Bus 001 Device 002: ID 1234:5678 Device Name
+                    parts = line.split("ID ")
+                    if len(parts) > 1:
+                        id_and_name = parts[1].strip().split(" ", 1)
+                        if len(id_and_name) > 1:
+                            name = id_and_name[1].strip()
+                            if not any(ignore in name.lower() for ignore in ("root hub", "linux foundation", "hub")):
+                                if name and name not in devices:
+                                    devices.append(name)
             else:
-                # Scan USB devices on Linux using lsusb or /sys/bus/usb/devices.
-                if shutil.which("lsusb"):
-                    result = subprocess.run(
-                        ["lsusb"],
-                        capture_output=True,
-                        text=True,
-                        errors='ignore'
-                    )
-                    for line in result.stdout.split('\n'):
-                        # Example format: Bus 001 Device 002: ID 1234:5678 Device Name
-                        parts = line.split("ID ")
-                        if len(parts) > 1:
-                            id_and_name = parts[1].strip().split(" ", 1)
-                            if len(id_and_name) > 1:
-                                name = id_and_name[1].strip()
-                                if not any(ignore in name.lower() for ignore in ("root hub", "linux foundation", "hub")):
-                                    if name and name not in devices:
-                                        devices.append(name)
-                else:
-                    for prod_file in glob.glob("/sys/bus/usb/devices/*/product"):
-                        try:
-                            with open(prod_file, "r", encoding="utf-8", errors="ignore") as f:
-                                name = f.read().strip()
-                                if name and not any(ignore in name.lower() for ignore in ("host controller", "root hub", "hub")):
-                                    if name not in devices:
-                                        devices.append(name)
-                        except OSError:
-                            continue
+                # If lsusb is unavailable, read device names from sysfs.
+                for prod_file in glob.glob("/sys/bus/usb/devices/*/product"):
+                    try:
+                        with open(prod_file, "r", encoding="utf-8", errors="ignore") as f:
+                            name = f.read().strip()
+                            if name and not any(ignore in name.lower() for ignore in ("host controller", "root hub", "hub")):
+                                if name not in devices:
+                                    devices.append(name)
+                    except OSError:
+                        continue
 
             if not devices:
                 self.usb_data_ready.emit("USB: No external devices found")

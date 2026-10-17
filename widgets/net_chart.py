@@ -49,10 +49,10 @@ class TacticalNetChart(QChartView):
         
         self.lbl_title = QLabel()
         self.lbl_title.setText(f"<b>{title}</b>")
-        self.lbl_title.setStyleSheet(f"color: {color_hex}; font-family: 'Consolas', 'Courier New', monospace; font-size: 9pt; border: none;")
+        self.lbl_title.setStyleSheet(f"color: {color_hex}; font-family: monospace; font-size: 9pt; border: none;")
         
         self.lbl_counter = QLabel("0.0 KB/s")
-        self.lbl_counter.setStyleSheet(f"color: {color_hex}; font-family: 'Consolas', 'Courier New', monospace; font-size: 11pt; font-weight: bold; border: none;")
+        self.lbl_counter.setStyleSheet(f"color: {color_hex}; font-family: monospace; font-size: 11pt; font-weight: bold; border: none;")
         self.lbl_counter.setAlignment(Qt.AlignmentFlag.AlignRight)
         
         self.overlay_layout.addWidget(self.lbl_title)
