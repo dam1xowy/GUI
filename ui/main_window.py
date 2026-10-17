@@ -15,10 +15,19 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFileSystemModel, QCursor
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtCore import QTimer, Qt, QUrl, QProcess
+from PyQt6.QtCore import QEvent, QModelIndex, QTimer, Qt, QUrl, QProcess
 
 from widgets.net_chart import TacticalNetChart
 from core.workers import SystemMonitorWorker, HeavyTasksWorker, NtpSyncWorker
+
+
+class DeselectableFileTreeView(QTreeView):
+    def mousePressEvent(self, event):
+        if os.name == 'nt' and not self.indexAt(event.position().toPoint()).isValid():
+            self.clearSelection()
+            self.setCurrentIndex(QModelIndex())
+        super().mousePressEvent(event)
+
 
 if os.name == 'nt':
     try:
@@ -55,6 +64,7 @@ class MainAppWindow(QMainWindow):
         self.ntp_sync_monotonic = None
 
         self.init_ui()
+        QApplication.instance().installEventFilter(self)
         self.start_background_workers()
         self.ntp_worker = NtpSyncWorker(self)
         self.ntp_worker.sync_ready.connect(self.handle_ntp_sync)
@@ -66,6 +76,13 @@ class MainAppWindow(QMainWindow):
         self.fast_timer = QTimer(self)
         self.fast_timer.timeout.connect(self.update_fast_ui_elements)
         self.fast_timer.start(100)
+
+    def _make_process_table_read_only(self, table):
+        if not self.is_windows:
+            return
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def init_ui(self):
         central_widget = QWidget()
@@ -94,13 +111,13 @@ class MainAppWindow(QMainWindow):
         tab1_layout.setContentsMargins(6, 6, 6, 6)
         tab1_layout.setSpacing(12)
         
-        # --- KOLUMNA 1: CPU ---
+        # --- COLUMN 1: CPU ---
         cpu_frame = QFrame()
         cpu_layout = QVBoxLayout(cpu_frame)
         cpu_layout.setContentsMargins(12, 12, 12, 12)
         
         cpu_top_layout = QHBoxLayout()
-        cpu_top_layout.addWidget(QLabel("<b>[ WĄTKI CPU & TEMPERATURA ]</b>"))
+        cpu_top_layout.addWidget(QLabel("<b>[ CPU THREADS & TEMPERATURE ]</b>"))
         self.temp_label = QLabel("CPU Temp: OK")
         self.temp_label.setStyleSheet("color: #FFB300; font-weight: bold;")
         cpu_top_layout.addWidget(self.temp_label, alignment=Qt.AlignmentFlag.AlignRight)
@@ -116,7 +133,7 @@ class MainAppWindow(QMainWindow):
         num_cores = psutil.cpu_count(logical=True) or 1
         for i in range(num_cores):
             bar_layout = QHBoxLayout()
-            lbl = QLabel(f"Wątek {i}:")
+            lbl = QLabel(f"Thread {i}:")
             lbl.setFixedWidth(65)
             pbar = QProgressBar()
             pbar.setRange(0, 100)
@@ -130,14 +147,14 @@ class MainAppWindow(QMainWindow):
         cpu_layout.addWidget(cpu_scroll)
         tab1_layout.addWidget(cpu_frame, 0, 0)
 
-        # --- KOLUMNA 2: RAM & PROCESY ---
+        # --- COLUMN 2: RAM & PROCESSES ---
         ram_frame = QFrame()
         ram_layout = QVBoxLayout(ram_frame)
         ram_layout.setContentsMargins(12, 12, 12, 12)
         ram_layout.setSpacing(10)
         
-        ram_layout.addWidget(QLabel("<b>[ PAMIĘĆ RAM & PROCESY ]</b>"))
-        self.ram_info_label = QLabel("Użycie RAM: 0%")
+        ram_layout.addWidget(QLabel("<b>[ RAM & PROCESSES ]</b>"))
+        self.ram_info_label = QLabel("RAM Usage: 0%")
         ram_layout.addWidget(self.ram_info_label)
         
         ram_grid_widget = QWidget()
@@ -155,49 +172,52 @@ class MainAppWindow(QMainWindow):
         ram_layout.addWidget(ram_grid_widget)
         
         ram_layout.addSpacing(5)
-        ram_layout.addWidget(QLabel("Top 3 procesy (RAM):"))
+        ram_layout.addWidget(QLabel("Top 3 Processes (RAM):"))
         self.proc_table = QTableWidget(3, 2)
-        self.proc_table.setHorizontalHeaderLabels(["Proces", "RAM (MB)"])
+        self.proc_table.setHorizontalHeaderLabels(["Process", "RAM (MB)"])
         self.proc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.proc_table.setFixedHeight(150)
+        self._make_process_table_read_only(self.proc_table)
         ram_layout.addWidget(self.proc_table)
 
         ram_layout.addSpacing(5)
-        ram_layout.addWidget(QLabel("Top 3 procesy (CPU):"))
+        ram_layout.addWidget(QLabel("Top 3 Processes (CPU):"))
         self.proc_cpu_table = QTableWidget(3, 2)
-        self.proc_cpu_table.setHorizontalHeaderLabels(["Proces", "CPU (%)"])
+        self.proc_cpu_table.setHorizontalHeaderLabels(["Process", "CPU (%)"])
         self.proc_cpu_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.proc_cpu_table.setFixedHeight(150)
+        self._make_process_table_read_only(self.proc_cpu_table)
         ram_layout.addWidget(self.proc_cpu_table)
 
         ram_layout.addSpacing(5)
-        ram_layout.addWidget(QLabel("Top 3 procesy (GPU):"))
+        ram_layout.addWidget(QLabel("Top 3 Processes (GPU):"))
         self.proc_gpu_table = QTableWidget(3, 2)
-        self.proc_gpu_table.setHorizontalHeaderLabels(["Proces", "GPU (%)"])
+        self.proc_gpu_table.setHorizontalHeaderLabels(["Process", "GPU (%)"])
         self.proc_gpu_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.proc_gpu_table.setFixedHeight(150)
+        self._make_process_table_read_only(self.proc_gpu_table)
         ram_layout.addWidget(self.proc_gpu_table)
         
         ram_layout.addStretch()
         tab1_layout.addWidget(ram_frame, 0, 1)
 
-        # --- KOLUMNA 3: STATYSTYKI ---
+        # --- COLUMN 3: STATISTICS ---
         tele_frame = QFrame()
         tele_layout = QVBoxLayout(tele_frame)
         tele_layout.setContentsMargins(12, 12, 12, 12)
         tele_layout.setSpacing(8)
         
-        title_lbl = QLabel("<b>[ TELEMETRIA UŻYTKOWNIKA & SYSTEM ]</b>")
+        title_lbl = QLabel("<b>[ USER & SYSTEM TELEMETRY ]</b>")
         title_lbl.setFixedHeight(15) 
         tele_layout.addWidget(title_lbl)
         
         self.uptime_label = QLabel("System Uptime: --")
-        self.dist_label = QLabel("Przebyty dystans myszy: 0.00 m")
-        self.speed_label = QLabel("Prędkość kursora: 0 px/s")
-        self.cps_label = QLabel("Prędkość klikania (CPS): 0.0")
-        self.click_label = QLabel("Łączne kliknięcia myszą: 0")
-        self.key_label = QLabel("Wciśnięcia klawiszy: 0")
-        self.clipboard_label = QLabel("Schowek: [pusty]")
+        self.dist_label = QLabel("Mouse Distance: 0.00 m")
+        self.speed_label = QLabel("Cursor Speed: 0 px/s")
+        self.cps_label = QLabel("Click Rate (CPS): 0.0")
+        self.click_label = QLabel("Total Mouse Clicks: 0")
+        self.key_label = QLabel("Key Presses: 0")
+        self.clipboard_label = QLabel("Clipboard: [empty]")
         self.clipboard_label.setWordWrap(True)
 
         stats_container = QWidget()
@@ -212,7 +232,7 @@ class MainAppWindow(QMainWindow):
         tele_layout.addWidget(stats_container)
         
         tele_layout.addSpacing(15)
-        self.vol_label = QLabel("Głośność systemu: --%")
+        self.vol_label = QLabel("System Volume: --%")
         self.vol_label.setFixedHeight(25) 
         tele_layout.addWidget(self.vol_label)
         
@@ -222,21 +242,14 @@ class MainAppWindow(QMainWindow):
         initial_vol = self._get_initial_volume()
         if initial_vol is not None:
             self.vol_slider.setValue(initial_vol)
-            self.vol_label.setText(f"Głośność systemu: {initial_vol}%")
+            self.vol_label.setText(f"System Volume: {initial_vol}%")
 
         self.vol_slider.valueChanged.connect(self.change_volume)
         tele_layout.addWidget(self.vol_slider)
 
         tele_layout.addSpacing(10)
         self.panic_btn = QPushButton("PRESS FOR SURPRISE")
-        self.panic_btn.setStyleSheet("""
-            QPushButton { 
-                background-color: #330000; color: #FF3333; 
-                border: 1px solid #FF3333; font-family: "Consolas", "Courier New", monospace; 
-                font-weight: bold; padding: 10px; border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #FF3333; color: #000000; }
-        """)
+        self.panic_btn.setObjectName("panicButton")
         self.panic_btn.clicked.connect(self.trigger_shutdown)
         tele_layout.addWidget(self.panic_btn)
         
@@ -244,7 +257,7 @@ class MainAppWindow(QMainWindow):
         tab1_layout.setColumnStretch(0, 3)
         tab1_layout.setColumnStretch(1, 3)
         tab1_layout.setColumnStretch(2, 4)
-        self.tabs.addTab(tab1, "TELEMETRIA i SPRZĘT")
+        self.tabs.addTab(tab1, "HARDWARE & TELEMETRY")
 
     def _setup_files_tab(self):
         tab2 = QWidget()
@@ -253,11 +266,11 @@ class MainAppWindow(QMainWindow):
         
         file_frame = QFrame()
         file_layout = QVBoxLayout(file_frame)
-        file_layout.addWidget(QLabel("<b>[ SEKTOR ANALIZY PLIKÓW & ZARZĄDZANIE ]</b>"))
+        file_layout.addWidget(QLabel("<b>[ FILE ANALYSIS & MANAGEMENT ]</b>"))
         
         self.file_model = QFileSystemModel()
         self.file_model.setRootPath(self.base_root_path)
-        self.file_tree = QTreeView()
+        self.file_tree = DeselectableFileTreeView()
         self.file_tree.setModel(self.file_model)
         self.file_tree.setRootIndex(self.file_model.index(self.base_root_path))
         self.file_tree.setColumnHidden(1, False)
@@ -267,12 +280,12 @@ class MainAppWindow(QMainWindow):
         file_layout.addWidget(self.file_tree)
 
         file_btn_layout = QHBoxLayout()
-        btn_new_file = QPushButton("Nowy Plik")
+        btn_new_file = QPushButton("New File")
         btn_new_file.clicked.connect(self.create_new_file)
-        btn_new_dir = QPushButton("Nowy Folder")
+        btn_new_dir = QPushButton("New Folder")
         btn_new_dir.clicked.connect(self.create_new_folder)
         
-        btn_delete = QPushButton("Usuń Zaznaczone")
+        btn_delete = QPushButton("Delete Selected")
         btn_delete.setStyleSheet("background-color: #2b0f0f; color: #ff5555; border: 1px solid #ff5555;")
         btn_delete.clicked.connect(self.delete_selected_item)
         
@@ -287,35 +300,35 @@ class MainAppWindow(QMainWindow):
         nd_layout = QVBoxLayout(net_disk_frame)
         nd_layout.setContentsMargins(12, 12, 12, 12)
         nd_layout.setSpacing(10)
-        nd_layout.addWidget(QLabel("<b>[ DIAGNOSTYKA SIECI I PAMIĘCI MASOWEJ ]</b>"))
+        nd_layout.addWidget(QLabel("<b>[ NETWORK & STORAGE DIAGNOSTICS ]</b>"))
         
-        self.disk_label = QLabel("Dyski: Skanowanie...")
+        self.disk_label = QLabel("Drives: Scanning...")
         self.disk_label.setWordWrap(True)
         nd_layout.addWidget(self.disk_label)
         
         nd_layout.addSpacing(5)
         nd_layout.addWidget(QLabel("<b>[ LIVE NETWORK TRAFFIC MONITORS ]</b>"))
-        self.dl_chart = TacticalNetChart("Pobieranie:", "#00FF66")
+        self.dl_chart = TacticalNetChart("Download:", "#00FF66")
         nd_layout.addWidget(self.dl_chart)
-        self.ul_chart = TacticalNetChart("Wysyłanie:", "#33FF88")
+        self.ul_chart = TacticalNetChart("Upload:", "#33FF88")
         nd_layout.addWidget(self.ul_chart)
 
         nd_layout.addSpacing(5)
-        self.ip_ping_label = QLabel("Lokalne IP: -- | Status: Aktywny")
+        self.ip_ping_label = QLabel("Local IP: -- | Status: Active")
         self.ip_ping_label.setWordWrap(True)
         nd_layout.addWidget(self.ip_ping_label)
         
-        self.usb_label = QLabel("USB: Skanowanie urządzeń...")
+        self.usb_label = QLabel("USB: Scanning for devices...")
         self.usb_label.setWordWrap(True)
         nd_layout.addWidget(self.usb_label)
         
-        self.atomic_clock_label = QLabel("Zegar: Oczekiwanie na synchronizację NTP...")
+        self.atomic_clock_label = QLabel("Clock: Waiting for NTP synchronization...")
         self.atomic_clock_label.setWordWrap(True)
         self.atomic_clock_label.setStyleSheet("color: #00FF66; font-weight: bold; font-size: 10pt; margin-top: 5px;")
         nd_layout.addWidget(self.atomic_clock_label)
 
         tab2_layout.addWidget(net_disk_frame, 0, 1)
-        self.tabs.addTab(tab2, "PLIKI, DYSKI i SIEĆ")
+        self.tabs.addTab(tab2, "FILES, DRIVES & NETWORK")
         
         self.cached_ip = self.get_local_ip()
 
@@ -326,7 +339,7 @@ class MainAppWindow(QMainWindow):
         
         cmd_frame = QFrame()
         cmd_layout = QVBoxLayout(cmd_frame)
-        cmd_layout.addWidget(QLabel("<b>[ SYSTEM CMD SHELL - INTERAKTYWNY TERMINAL ]</b>"))
+        cmd_layout.addWidget(QLabel("<b>[ SYSTEM COMMAND SHELL - INTERACTIVE TERMINAL ]</b>"))
         
         self.cmd_output = QTextEdit()
         self.cmd_output.setReadOnly(True)
@@ -338,7 +351,7 @@ class MainAppWindow(QMainWindow):
         prompt_lbl.setStyleSheet("color: #00FF66; font-weight: bold;")
         
         self.cmd_input = QLineEdit()
-        self.cmd_input.setPlaceholderText("Wpisz komendę...")
+        self.cmd_input.setPlaceholderText("Enter a command...")
         self.cmd_input.returnPressed.connect(self.run_cmd_command)
         
         cmd_input_layout.addWidget(prompt_lbl)
@@ -401,7 +414,7 @@ class MainAppWindow(QMainWindow):
         self.heavy_worker.usb_data_ready.connect(self.update_usb_ui) 
         self.heavy_worker.start()
 
-    # --- METODY AKTUALIZUJĄCE GUI Z WĄTKÓW ---
+    # --- UI UPDATES FROM WORKERS ---
     def update_cpu_ui(self, cpu_usages):
         for i, usage in enumerate(cpu_usages):
             if i < len(self.cpu_bars):
@@ -409,7 +422,7 @@ class MainAppWindow(QMainWindow):
                 self.cpu_bars[i].setFormat(f"{usage}%")
 
     def update_ram_ui(self, ram):
-        self.ram_info_label.setText(f"Użycie RAM: {ram.percent}% ({ram.used // (1024*1024)} MB)")
+        self.ram_info_label.setText(f"RAM Usage: {ram.percent}% ({ram.used // (1024*1024)} MB)")
         active_blocks = int((ram.percent / 100.0) * len(self.ram_blocks))
         for idx, block in enumerate(self.ram_blocks):
             if idx < active_blocks:
@@ -418,7 +431,7 @@ class MainAppWindow(QMainWindow):
                 block.setStyleSheet("background-color: #121e12; border: 1px solid #1f331f; border-radius: 2px;")
 
     def update_disks_ui(self, disks_text):
-        self.disk_label.setText(f"Dyski: {disks_text}")
+        self.disk_label.setText(f"Drives: {disks_text}")
 
     def update_processes_ui(self, procs_ram, procs_cpu):
         self.proc_table.clearContents()
@@ -434,14 +447,14 @@ class MainAppWindow(QMainWindow):
     def update_gpu_ui(self, gpu_procs):
         self.proc_gpu_table.clearContents()
         if not gpu_procs:
-            self.proc_gpu_table.setItem(0, 0, QTableWidgetItem("Brak obciążenia GPU"))
+            self.proc_gpu_table.setItem(0, 0, QTableWidgetItem("No GPU activity"))
             self.proc_gpu_table.setItem(0, 1, QTableWidgetItem("-"))
         else:
             for row, (name, usage) in enumerate(gpu_procs):
                 self.proc_gpu_table.setItem(row, 0, QTableWidgetItem(name))
                 self.proc_gpu_table.setItem(row, 1, QTableWidgetItem(f"{usage} %"))
 
-    # --- SZYBKIE AKTUALIZACJE (MYSZ, CZAS, SIEĆ) ---
+    # --- FAST UPDATES (MOUSE, TIME, NETWORK) ---
     def sync_ntp_time(self):
         if not self.ntp_worker.isRunning():
             self.ntp_worker.start()
@@ -452,13 +465,13 @@ class MainAppWindow(QMainWindow):
 
     def handle_ntp_sync_failure(self):
         if self.ntp_time_epoch is None:
-            self.atomic_clock_label.setText("Zegar lokalny: NTP niedostępne (sprawdź Internet / UDP 123)")
+            self.atomic_clock_label.setText("Local clock: NTP unavailable (check Internet / UDP 123)")
 
     def update_fast_ui_elements(self):
         now = datetime.now()
         
         self.click_timestamps = [t for t in self.click_timestamps if (now - t).total_seconds() <= 1.0]
-        self.cps_label.setText(f"Prędkość klikania (CPS): {len(self.click_timestamps)}.0")
+        self.cps_label.setText(f"Click Rate (CPS): {len(self.click_timestamps)}.0")
 
         current_pos = QCursor.pos()
         dx = current_pos.x() - self.last_pos.x()
@@ -473,8 +486,8 @@ class MainAppWindow(QMainWindow):
         self.last_pos = current_pos
         self.last_time = now
         
-        self.dist_label.setText(f"Przebyty dystans myszy: {self.total_distance:.2f} m")
-        self.speed_label.setText(f"Prędkość kursora: {self.current_speed:.1f} px/s")
+        self.dist_label.setText(f"Mouse Distance: {self.total_distance:.2f} m")
+        self.speed_label.setText(f"Cursor Speed: {self.current_speed:.1f} px/s")
 
         if now.microsecond < 150000: 
             net_io = psutil.net_io_counters()
@@ -498,14 +511,14 @@ class MainAppWindow(QMainWindow):
 
         if self.ntp_time_epoch is None:
             clock_now = now
-            clock_source = "lokalny; NTP niedostępne"
+            clock_source = "local; NTP unavailable"
         else:
             synced_epoch = self.ntp_time_epoch + time.monotonic() - self.ntp_sync_monotonic
             clock_now = datetime.fromtimestamp(synced_epoch)
             clock_source = "NTP synchronized"
         now_str = clock_now.strftime("%H:%M:%S.%f")[:-3]
-        self.atomic_clock_label.setText(f"Zegar ({clock_source}): {now_str}")
-        self.ip_ping_label.setText(f"Lokalne IP: {self.cached_ip} | Status: Aktywny (OK)")
+        self.atomic_clock_label.setText(f"Clock ({clock_source}): {now_str}")
+        self.ip_ping_label.setText(f"Local IP: {self.cached_ip} | Status: Active (OK)")
         
         try:
             clipboard_text = QApplication.clipboard().text()
@@ -513,13 +526,13 @@ class MainAppWindow(QMainWindow):
                 clean_text = clipboard_text.replace('\n', ' ')[:35]
                 if len(clipboard_text) > 35:
                     clean_text += "..."
-                self.clipboard_label.setText(f"Schowek: \"{clean_text}\"")
+                self.clipboard_label.setText(f"Clipboard: \"{clean_text}\"")
             else:
-                self.clipboard_label.setText("Schowek: [pusty]")
+                self.clipboard_label.setText("Clipboard: [empty]")
         except Exception as e:
-            print(f"Błąd schowka: {e}")
+            print(f"Clipboard error: {e}")
 
-    # --- ZARZĄDZANIE PLIKAMI ---
+    # --- FILE MANAGEMENT ---
     def get_selected_path(self):
         index = self.file_tree.currentIndex()
         if index.isValid():
@@ -536,35 +549,35 @@ class MainAppWindow(QMainWindow):
 
     def create_new_file(self):
         target_dir = self._get_target_directory()
-        name, ok = QInputDialog.getText(self, "Nowy Plik", f"Wprowadź nazwę nowego pliku w folderze {target_dir}:")
+        name, ok = QInputDialog.getText(self, "New File", f"Enter a name for the new file in {target_dir}:")
         if ok and name:
             full_path = os.path.join(target_dir, name)
             try:
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write("")
             except Exception as e:
-                QMessageBox.critical(self, "Błąd", f"Nie udało się utworzyć pliku:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Could not create the file:\n{str(e)}")
 
     def create_new_folder(self):
         target_dir = self._get_target_directory()
-        name, ok = QInputDialog.getText(self, "Nowy Folder", f"Wprowadź nazwę nowego folderu w {target_dir}:")
+        name, ok = QInputDialog.getText(self, "New Folder", f"Enter a name for the new folder in {target_dir}:")
         if ok and name:
             full_path = os.path.join(target_dir, name)
             try:
                 os.makedirs(full_path, exist_ok=True)
             except Exception as e:
-                QMessageBox.critical(self, "Błąd", f"Nie udało się utworzyć folderu:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Could not create the folder:\n{str(e)}")
 
     def delete_selected_item(self):
         full_path = self.get_selected_path()
         if not full_path or os.path.abspath(full_path) == os.path.abspath(self.base_root_path):
-            QMessageBox.warning(self, "Ostrzeżenie", f"Wybierz plik lub folder w {self.base_root_path} do usunięcia.")
+            QMessageBox.warning(self, "Warning", f"Select a file or folder in {self.base_root_path} to delete.")
             return
         
         confirm = QMessageBox.question(
             self, 
-            "Potwierdzenie usunięcia", 
-            f"Czy na pewno chcesz trwale usunąć:\n{full_path}?",
+            "Confirm Deletion",
+            f"Are you sure you want to permanently delete:\n{full_path}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
@@ -575,9 +588,9 @@ class MainAppWindow(QMainWindow):
                 else:
                     os.remove(full_path)
             except Exception as e:
-                QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć obiektu:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Could not delete the item:\n{str(e)}")
 
-    # --- TERMINAL I INNE FUNKCJE ---
+    # --- TERMINAL AND OTHER FUNCTIONS ---
     def run_cmd_command(self):
         command = self.cmd_input.text().strip()
         if command:
@@ -624,7 +637,7 @@ class MainAppWindow(QMainWindow):
                 speakers = AudioUtilities.GetSpeakers()
                 return int(speakers.volume_percent)
             except Exception as e:
-                print(f"Błąd pycaw init: {e}")
+                print(f"pycaw initialization error: {e}")
         elif not self.is_windows:
             try:
                 if shutil.which("pactl"):
@@ -644,17 +657,17 @@ class MainAppWindow(QMainWindow):
                     if match:
                         return min(100, int(match.group(1)))
             except Exception as e:
-                print(f"Błąd odczytu głośności Linux: {e}")
+                print(f"Linux volume read error: {e}")
         return None
 
     def change_volume(self, value):
-        self.vol_label.setText(f"Głośność systemu: {value}%")
+        self.vol_label.setText(f"System Volume: {value}%")
         if self.is_windows and PYCAW_AVAILABLE:
             try:
                 speakers = AudioUtilities.GetSpeakers()
                 speakers.volume_percent = value
             except Exception as e:
-                print(f"Błąd zmiany głośności: {e}")
+                print(f"Volume change error: {e}")
         elif not self.is_windows:
             try:
                 if shutil.which("pactl"):
@@ -668,7 +681,7 @@ class MainAppWindow(QMainWindow):
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     )
             except Exception as e:
-                print(f"Błąd zmiany głośności Linux: {e}")
+                print(f"Linux volume change error: {e}")
 
     def trigger_shutdown(self):
         if self.is_windows:
@@ -678,18 +691,67 @@ class MainAppWindow(QMainWindow):
         self.panic_btn.setText("seriously?")
         self.panic_btn.setEnabled(False)
 
-    def keyPressEvent(self, event):
+    def _record_key_press(self):
         self.key_count += 1
-        self.key_label.setText(f"Wciśnięcia klawiszy: {self.key_count}")
-        super().keyPressEvent(event)
+        self.key_label.setText(f"Key Presses: {self.key_count}")
 
-    def mousePressEvent(self, event):
+    def _record_mouse_click(self):
         self.click_count += 1
         self.click_timestamps.append(datetime.now())
-        self.click_label.setText(f"Łączne kliknięcia myszą: {self.click_count}")
+        self.click_label.setText(f"Total Mouse Clicks: {self.click_count}")
+
+    def eventFilter(self, watched, event):
+        if isinstance(watched, QWidget):
+            belongs_to_window = watched is self or self.isAncestorOf(watched)
+            if belongs_to_window:
+                event_type = event.type()
+                if (
+                    event_type == QEvent.Type.KeyPress
+                    and QApplication.focusWidget() is watched
+                ):
+                    self._record_key_press()
+
+                if self.is_windows:
+                    mouse_events = (
+                        QEvent.Type.MouseButtonPress,
+                        QEvent.Type.MouseButtonRelease,
+                        QEvent.Type.MouseButtonDblClick,
+                    )
+                    if event_type in (
+                        QEvent.Type.MouseButtonPress,
+                        QEvent.Type.MouseButtonDblClick,
+                    ) and QApplication.widgetAt(event.globalPosition().toPoint()) is watched:
+                        self._record_mouse_click()
+
+                    process_tables = (
+                        self.proc_table,
+                        self.proc_cpu_table,
+                        self.proc_gpu_table,
+                    )
+                    if any(table is watched or table.isAncestorOf(watched) for table in process_tables):
+                        if event_type in mouse_events or event_type in (
+                            QEvent.Type.KeyPress,
+                            QEvent.Type.KeyRelease,
+                            QEvent.Type.ContextMenu,
+                        ):
+                            return True
+
+        return super().eventFilter(watched, event)
+
+    def mousePressEvent(self, event):
+        if not self.is_windows:
+            self._record_mouse_click()
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        if not self.is_windows:
+            self._record_mouse_click()
+        super().mouseDoubleClickEvent(event)
+
     def closeEvent(self, event):
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
         self.ntp_worker.requestInterruption()
         self.ntp_worker.wait()
         self.sys_worker.stop()

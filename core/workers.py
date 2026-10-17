@@ -101,7 +101,7 @@ class HeavyTasksWorker(QThread):
         self.loop_counter = 0
 
     def _get_subprocess_kwargs(self):
-        """Zwraca flagi ukrywające okno konsoli tylko na systemie Windows."""
+        """Return flags that hide the console window on Windows only."""
         kwargs = {}
         if os.name == 'nt':
             startupinfo = subprocess.STARTUPINFO()
@@ -134,7 +134,7 @@ class HeavyTasksWorker(QThread):
                         continue
                     label = p.device
                 else:
-                    # Pomijamy wirtualne obrazy (np. pakiety snap) i tymczasowe systemy plików na Linuksie
+                    # Skip virtual images (e.g. snap packages) and temporary Linux filesystems.
                     if p.device.startswith('/dev/loop') or p.fstype in ('squashfs', 'tmpfs', 'devtmpfs'):
                         continue
                     label = p.mountpoint
@@ -145,9 +145,9 @@ class HeavyTasksWorker(QThread):
                 except PermissionError:
                     continue
 
-            self.disks_data_ready.emit(" | ".join(disk_texts[:3]) if disk_texts else "Brak danych")
+            self.disks_data_ready.emit(" | ".join(disk_texts[:3]) if disk_texts else "No data")
         except Exception as e:
-            print(f"Błąd odczytu dysków: {e}")
+            print(f"Disk read error: {e}")
 
     def _scan_processes(self):
         try:
@@ -177,7 +177,7 @@ class HeavyTasksWorker(QThread):
             procs_cpu = sorted(procs_cpu, key=lambda x: x[1], reverse=True)[:3]
             self.processes_data_ready.emit(procs_ram, procs_cpu)
         except Exception as e:
-            print(f"Błąd skanowania procesów: {e}")
+            print(f"Process scan error: {e}")
 
     def _scan_gpu(self):
         try:
@@ -229,7 +229,7 @@ class HeavyTasksWorker(QThread):
             final_procs = sorted(aggr_procs.items(), key=lambda x: x[1], reverse=True)[:3]
             self.gpu_data_ready.emit(final_procs)
         except Exception as e:
-            print(f"Błąd odczytu GPU: {e}")
+            print(f"GPU read error: {e}")
             self.gpu_data_ready.emit([])
 
     def _scan_usb(self):
@@ -255,7 +255,7 @@ class HeavyTasksWorker(QThread):
                     if name and name not in devices:
                         devices.append(name)
             else:
-                # Skanowanie USB na systemie Linux (lsusb lub /sys/bus/usb/devices)
+                # Scan USB devices on Linux using lsusb or /sys/bus/usb/devices.
                 if shutil.which("lsusb"):
                     result = subprocess.run(
                         ["lsusb"],
@@ -264,7 +264,7 @@ class HeavyTasksWorker(QThread):
                         errors='ignore'
                     )
                     for line in result.stdout.split('\n'):
-                        # Przykładowy format: Bus 001 Device 002: ID 1234:5678 Nazwa Urządzenia
+                        # Example format: Bus 001 Device 002: ID 1234:5678 Device Name
                         parts = line.split("ID ")
                         if len(parts) > 1:
                             id_and_name = parts[1].strip().split(" ", 1)
@@ -285,17 +285,17 @@ class HeavyTasksWorker(QThread):
                             continue
 
             if not devices:
-                self.usb_data_ready.emit("USB: Brak zewnętrznych urządzeń")
+                self.usb_data_ready.emit("USB: No external devices found")
                 return
                 
             dev_summary = ", ".join(devices[:3])
             if len(devices) > 3:
-                dev_summary += f" (+{len(devices)-3} inne)"
+                dev_summary += f" (+{len(devices)-3} more)"
                 
             self.usb_data_ready.emit(f"USB: {dev_summary}")
         except Exception as e:
-            print(f"Błąd odczytu USB: {e}")
-            self.usb_data_ready.emit("USB: Odczyt niedostępny")
+            print(f"USB read error: {e}")
+            self.usb_data_ready.emit("USB: Reading unavailable")
 
     def stop(self):
         self.is_running = False

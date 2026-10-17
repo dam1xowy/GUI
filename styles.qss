@@ -101,6 +101,21 @@ QPushButton:hover {
     color: #33ff88;
 }
 
+QPushButton#panicButton {
+    background-color: #330000;
+    color: #FF3333;
+    border: 1px solid #FF3333;
+    font-family: "Consolas", "Courier New", monospace;
+    font-weight: bold;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+QPushButton#panicButton:hover {
+    background-color: #FF3333;
+    color: #000000;
+}
+
 QSlider::groove:horizontal {
     border: 1px solid #1f331f;
     height: 6px;

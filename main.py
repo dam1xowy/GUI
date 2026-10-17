@@ -9,12 +9,12 @@ def load_stylesheet(app_instance, filepath):
         with open(filepath, "r", encoding="utf-8") as file:
             app_instance.setStyleSheet(file.read())
     else:
-        print(f"Nie znaleziono pliku stylów '{filepath}'")
+        print(f"Stylesheet file not found: '{filepath}'")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     
-    # Ustalenie ścieżki bazowej do pliku stylów QSS niezależnie od systemu operacyjnego
+    # Resolve the QSS stylesheet path independently of the operating system.
     base_dir = os.path.dirname(os.path.abspath(__file__))
     stylesheet_path = os.path.join(base_dir, "styles.qss")
     
