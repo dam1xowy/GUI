@@ -1,0 +1,4 @@
+PyQt6
+PyQt6-Charts
+PyQt6-WebEngine
+psutil

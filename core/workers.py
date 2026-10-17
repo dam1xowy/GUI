@@ -234,7 +234,6 @@ class HeavyTasksWorker(QThread):
                     errors='ignore'
                 )
                 for line in result.stdout.split('\n'):
-                    # Example: Bus 001 Device 002: ID 1234:5678 Device Name
                     parts = line.split("ID ")
                     if len(parts) > 1:
                         id_and_name = parts[1].strip().split(" ", 1)
@@ -244,7 +243,6 @@ class HeavyTasksWorker(QThread):
                                 if name and name not in devices:
                                     devices.append(name)
             else:
-                # If lsusb is unavailable, read device names from sysfs.
                 for prod_file in glob.glob("/sys/bus/usb/devices/*/product"):
                     try:
                         with open(prod_file, "r", encoding="utf-8", errors="ignore") as f:

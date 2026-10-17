@@ -110,7 +110,6 @@ class MainAppWindow(QMainWindow):
         tab1_layout.setContentsMargins(6, 6, 6, 6)
         tab1_layout.setSpacing(12)
         
-        # --- COLUMN 1: CPU ---
         cpu_frame = QFrame()
         cpu_layout = QVBoxLayout(cpu_frame)
         cpu_layout.setContentsMargins(12, 12, 12, 12)
@@ -146,7 +145,6 @@ class MainAppWindow(QMainWindow):
         cpu_layout.addWidget(cpu_scroll)
         tab1_layout.addWidget(cpu_frame, 0, 0)
 
-        # --- COLUMN 2: RAM & PROCESSES ---
         ram_frame = QFrame()
         ram_layout = QVBoxLayout(ram_frame)
         ram_layout.setContentsMargins(12, 12, 12, 12)
@@ -200,7 +198,6 @@ class MainAppWindow(QMainWindow):
         ram_layout.addStretch()
         tab1_layout.addWidget(ram_frame, 0, 1)
 
-        # --- COLUMN 3: STATISTICS ---
         tele_frame = QFrame()
         tele_layout = QVBoxLayout(tele_frame)
         tele_layout.setContentsMargins(12, 12, 12, 12)
@@ -247,17 +244,12 @@ class MainAppWindow(QMainWindow):
         tele_layout.addWidget(self.vol_slider)
 
         tele_layout.addSpacing(10)
-        self.panic_btn = QPushButton("PRESS FOR SURPRISE")
-        self.panic_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #330000; color: #FF3333;
-                border: 1px solid #FF3333; font-family: monospace;
-                font-weight: bold; padding: 10px; border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #FF3333; color: #000000; }
-        """)
+        self.panic_btn = QPushButton("OS Shutdown")
+        self.panic_btn.setObjectName("panicBtn")
         self.panic_btn.clicked.connect(self.trigger_shutdown)
         tele_layout.addWidget(self.panic_btn)
+        
+        tab1_layout.addWidget(tele_frame, 0, 2)
         
         tab1_layout.addWidget(tele_frame, 0, 2)
         tab1_layout.setColumnStretch(0, 3)
@@ -452,7 +444,6 @@ class MainAppWindow(QMainWindow):
         self.heavy_worker.usb_data_ready.connect(self.update_usb_ui) 
         self.heavy_worker.start()
 
-    # --- UI UPDATES FROM WORKERS ---
     def update_cpu_temperature_ui(self, temperature):
         if temperature is None:
             self.temp_label.setText("CPU Temperature: unavailable")
@@ -498,7 +489,6 @@ class MainAppWindow(QMainWindow):
                 self.proc_gpu_table.setItem(row, 0, QTableWidgetItem(name))
                 self.proc_gpu_table.setItem(row, 1, QTableWidgetItem(f"{usage} %"))
 
-    # --- FAST UPDATES (MOUSE, TIME, NETWORK) ---
     def sync_ntp_time(self):
         if not self.ntp_worker.isRunning():
             self.ntp_worker.start()
@@ -576,7 +566,6 @@ class MainAppWindow(QMainWindow):
         except Exception as e:
             print(f"Clipboard error: {e}")
 
-    # --- FILE MANAGEMENT ---
     def get_selected_path(self):
         index = self.file_tree.currentIndex()
         if index.isValid():
@@ -637,7 +626,6 @@ class MainAppWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not delete the item:\n{e}")
 
-    # --- TERMINAL AND OTHER FUNCTIONS ---
     def run_cmd_command(self):
         command = self.cmd_input.text().strip()
         if command:
@@ -718,7 +706,7 @@ class MainAppWindow(QMainWindow):
 
     def trigger_shutdown(self):
         os.system("systemctl poweroff || shutdown -h now")
-        self.panic_btn.setText("seriously?")
+        self.panic_btn.setText("shutting down...")
         self.panic_btn.setEnabled(False)
 
     def _record_key_press(self):
