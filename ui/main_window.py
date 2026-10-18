@@ -254,8 +254,6 @@ class MainAppWindow(QMainWindow):
         tele_layout.addWidget(self.panic_btn)
         
         tab1_layout.addWidget(tele_frame, 0, 2)
-        
-        tab1_layout.addWidget(tele_frame, 0, 2)
         tab1_layout.setColumnStretch(0, 3)
         tab1_layout.setColumnStretch(1, 3)
         tab1_layout.setColumnStretch(2, 4)
@@ -595,26 +593,40 @@ class MainAppWindow(QMainWindow):
             return selected
         return os.path.dirname(selected) or self.base_root_path
 
+    @staticmethod
+    def _is_valid_entry_name(name):
+        return bool(name) and name not in {".", ".."} and os.path.basename(name) == name
+
     def create_new_file(self):
         target_dir = self._get_target_directory()
         name, ok = QInputDialog.getText(self, "New File", f"Enter a name for the new file in {target_dir}:")
-        if ok and name:
-            full_path = os.path.join(target_dir, name)
-            try:
-                with open(full_path, 'w', encoding='utf-8') as f:
-                    f.write("")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not create the file:\n{e}")
+        if not ok:
+            return
+        if not self._is_valid_entry_name(name):
+            QMessageBox.warning(self, "Invalid name", "Enter a file name without path separators.")
+            return
+
+        full_path = os.path.join(target_dir, name)
+        try:
+            with open(full_path, "x", encoding="utf-8"):
+                pass
+        except OSError as e:
+            QMessageBox.critical(self, "Error", f"Could not create the file:\n{e}")
 
     def create_new_folder(self):
         target_dir = self._get_target_directory()
         name, ok = QInputDialog.getText(self, "New Folder", f"Enter a name for the new folder in {target_dir}:")
-        if ok and name:
-            full_path = os.path.join(target_dir, name)
-            try:
-                os.makedirs(full_path, exist_ok=True)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not create the folder:\n{e}")
+        if not ok:
+            return
+        if not self._is_valid_entry_name(name):
+            QMessageBox.warning(self, "Invalid name", "Enter a folder name without path separators.")
+            return
+
+        full_path = os.path.join(target_dir, name)
+        try:
+            os.mkdir(full_path)
+        except OSError as e:
+            QMessageBox.critical(self, "Error", f"Could not create the folder:\n{e}")
 
     def delete_selected_item(self):
         full_path = self.get_selected_path()
@@ -631,10 +643,10 @@ class MainAppWindow(QMainWindow):
         
         if confirm == QMessageBox.StandardButton.Yes:
             try:
-                if os.path.isdir(full_path):
-                    shutil.rmtree(full_path)
-                else:
+                if os.path.islink(full_path) or not os.path.isdir(full_path):
                     os.remove(full_path)
+                else:
+                    shutil.rmtree(full_path)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not delete the item:\n{e}")
 

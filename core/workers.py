@@ -223,48 +223,40 @@ class HeavyTasksWorker(QThread):
             print(f"GPU read error: {e}")
             self.gpu_data_ready.emit([])
 
-    def _scan_usb(self):
-        try:
-            devices = []
-            if shutil.which("lsusb"):
-                result = subprocess.run(
-                    ["lsusb"],
-                    capture_output=True,
-                    text=True,
-                    errors='ignore'
-                )
-                for line in result.stdout.split('\n'):
-                    parts = line.split("ID ")
-                    if len(parts) > 1:
-                        id_and_name = parts[1].strip().split(" ", 1)
-                        if len(id_and_name) > 1:
-                            name = id_and_name[1].strip()
-                            if not any(ignore in name.lower() for ignore in ("root hub", "linux foundation", "hub")):
-                                if name and name not in devices:
-                                    devices.append(name)
-            else:
-                for prod_file in glob.glob("/sys/bus/usb/devices/*/product"):
-                    try:
-                        with open(prod_file, "r", encoding="utf-8", errors="ignore") as f:
-                            name = f.read().strip()
-                            if name and not any(ignore in name.lower() for ignore in ("host controller", "root hub", "hub")):
-                                if name not in devices:
-                                    devices.append(name)
-                    except OSError:
-                        continue
+    @staticmethod
+    def _is_usb_hub(device_path):
+        class_files = [f"{device_path}/bDeviceClass"]
+        class_files.extend(
+            glob.glob(f"{device_path}:*/bInterfaceClass")
+        )
+        for class_file in class_files:
+            try:
+                with open(class_file, "r", encoding="utf-8", errors="ignore") as f:
+                    if f.read().strip().lower() == "09":
+                        return True
+            except OSError:
+                continue
+        return False
 
-            if not devices:
-                self.usb_data_ready.emit("USB: No external devices found")
-                return
-                
-            dev_summary = ", ".join(devices[:3])
-            if len(devices) > 3:
-                dev_summary += f" (+{len(devices)-3} more)"
-                
-            self.usb_data_ready.emit(f"USB: {dev_summary}")
-        except Exception as e:
-            print(f"USB read error: {e}")
-            self.usb_data_ready.emit("USB: Reading unavailable")
+    def _scan_usb(self):
+        devices = []
+        for prod_file in glob.glob("/sys/bus/usb/devices/*/product"):
+            device_path = prod_file.rsplit("/", 1)[0]
+            try:
+                with open(prod_file, "r", encoding="utf-8", errors="ignore") as f:
+                    name = f.read().strip()
+            except OSError:
+                continue
+
+            if not name or self._is_usb_hub(device_path):
+                continue
+            devices.append(name)
+
+        if not devices:
+            self.usb_data_ready.emit("USB: No USB devices found")
+            return
+
+        self.usb_data_ready.emit(f"USB ({len(devices)}): {', '.join(devices)}")
 
     def stop(self):
         self.is_running = False
